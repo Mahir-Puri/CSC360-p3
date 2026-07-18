@@ -5,16 +5,16 @@ CFLAGS = -Wall -g
 
 all: diskinfo disklist diskget diskput
 
-diskinfo: parts.c fs.h
+diskinfo: parts.c structs.h
 	$(CC) $(CFLAGS) -DDISKINFO -o diskinfo parts.c
 
-disklist: parts.c fs.h
+disklist: parts.c structs.h
 	$(CC) $(CFLAGS) -DDISKLIST -o disklist parts.c
 
-diskget: parts.c fs.h
+diskget: parts.c structs.h
 	$(CC) $(CFLAGS) -DDISKGET -o diskget parts.c
 
-diskput: parts.c fs.h
+diskput: parts.c structs.h
 	$(CC) $(CFLAGS) -DDISKPUT -o diskput parts.c
 
 clean:

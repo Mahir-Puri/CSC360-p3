@@ -48,3 +48,18 @@ typedef struct __attribute__((packed))
     uint32_t root_start;  // block number where the root directory begins
     uint32_t root_blocks; // how many blocks the root directory takes up
 } superblock_t;
+
+// one directory entry, 64 bytes exactly. 8 of
+// these fit per 512-byte block. same deal as above - start_block,
+// num_blocks and file_size are big endian on disk.
+typedef struct __attribute__((packed))
+{
+    uint8_t status;           // see STATUS_* bits above
+    uint32_t start_block;     // first block of this file/dir's data
+    uint32_t num_blocks;      // how many blocks it currently uses
+    uint32_t file_size;       // size in bytes (always 0 for directories)
+    uint8_t creation_time[7]; // YYYY MM DD HH MM SS, see decode_time()
+    uint8_t modified_time[7];
+    char filename[FILENAME_LEN]; // null terminated, so effectively 30 chars
+    uint8_t unused[6];           // padding, spec says this is 0xFF
+} dirent_t;

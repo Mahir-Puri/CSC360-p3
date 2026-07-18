@@ -1,0 +1,6 @@
+diskinfo
+disklist
+diskget
+diskput
+*.o
+*.dSYM

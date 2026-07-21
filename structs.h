@@ -63,3 +63,22 @@ typedef struct __attribute__((packed))
     char filename[FILENAME_LEN]; // null terminated, so effectively 30 chars
     uint8_t unused[6];           // padding, spec says this is 0xFF
 } dirent_t;
+
+// a "loaded" directory - not part of the on-disk format, this is just a
+// helper struct I made up so diskput has an easy way to read AND write a
+// directory's entries. it holds:
+//   - all of the directory's blocks read into one contiguous buffer
+//   - the real (possibly non-contiguous, since it's a linked list) block
+//     numbers those bytes came from, so we know where to write changes
+//   - for subdirectories, where ITS OWN dirent lives in the parent
+//     directory, so if we ever need to grow this directory we know where
+//     to go update its num_blocks field
+typedef struct
+{
+    uint8_t *data;       // n_blocks * sb.block_size bytes, all blocks back to back
+    uint32_t *blocknums; // blocknums[i] = actual disk block number of chunk i
+    uint32_t n_blocks;
+    int is_root;          // root dir has no parent dirent to update
+    uint32_t self_block;  // block (in parent) holding this dir's own dirent
+    uint32_t self_offset; // byte offset of that dirent within self_block
+} dirhandle_t;

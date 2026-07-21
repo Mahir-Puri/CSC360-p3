@@ -3,3 +3,11 @@
 This is my implementation of the CSC360FS assignment. It reads and
 writes a FAT-style file system image, using 4 separate command line
 programs: `diskinfo`, `disklist`, `diskget`, and `diskput`.
+
+## Files in this repo
+
+```
+structs.h - structs for the superblock/directory entry + function prototypes
+parts.c   - everything else: all 4 programs, plus the shared FAT/directory logic
+Makefile  - builds all 4 binaries
+```

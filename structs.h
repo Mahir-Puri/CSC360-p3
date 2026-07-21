@@ -82,3 +82,40 @@ typedef struct
     uint32_t self_block;  // block (in parent) holding this dir's own dirent
     uint32_t self_offset; // byte offset of that dirent within self_block
 } dirhandle_t;
+
+// everything below is implemented in parts.c
+
+void die(const char *msg);
+FILE *open_image(const char *path, const char *mode);
+void read_superblock(FILE *img, superblock_t *sb);
+uint32_t *load_fat(FILE *img, superblock_t *sb, uint32_t *n_entries_out);
+void save_fat(FILE *img, superblock_t *sb, uint32_t *fat, uint32_t n_entries);
+uint32_t alloc_block(uint32_t *fat, uint32_t n_entries);
+
+dirhandle_t load_root(FILE *img, superblock_t *sb, uint32_t *fat);
+dirhandle_t load_subdir(FILE *img, superblock_t *sb, uint32_t *fat,
+                        uint32_t start_block, uint32_t self_block, uint32_t self_offset);
+void free_dirhandle(dirhandle_t *dh);
+
+int dirhandle_find(dirhandle_t *dh, superblock_t *sb, const char *name, dirent_t *out, uint32_t *out_slot);
+int dirhandle_free_slot(dirhandle_t *dh, superblock_t *sb);
+void dirhandle_grow(FILE *img, superblock_t *sb, uint32_t *fat, uint32_t n_fat_entries, dirhandle_t *dh);
+void dirhandle_write_entry(FILE *img, superblock_t *sb, dirhandle_t *dh, uint32_t slot, dirent_t *entry);
+
+void decode_time(const uint8_t t[7], int *year, int *mon, int *day, int *hour, int *min, int *sec);
+void encode_time(uint8_t t[7], int year, int mon, int day, int hour, int min, int sec);
+void now_to_time(uint8_t t[7]);
+
+// splits eg "/sub_dir/foo.txt" into dirpath="/sub_dir" and filename="foo.txt"
+void split_last(const char *path, char *dirpath, char *filename);
+// splits a directory path into components, returns how many
+int split_path(const char *path, char comps[][FILENAME_LEN], int max_comps);
+
+// the 4 parts of the assignment - one function each, main() in parts.c
+// picks which one to call based on the -D flag the Makefile compiled with
+int diskinfo_run(const char *image);
+int disklist_run(const char *image, const char *path);
+int diskget_run(const char *image, const char *path, const char *destfile);
+int diskput_run(const char *image, const char *srcfile, const char *destpath);
+
+#endif

@@ -17,3 +17,26 @@
 #include "structs.h"
 
 #define MAX_PATH_COMPONENTS 64
+
+// ---------------------------------------------------------------------
+// basic helpers
+// ---------------------------------------------------------------------
+
+// for stuff that should never really happen (bad disk image, out of
+// memory, disk full) - just print an error and bail. the spec says return
+// code should be non-zero on failure, so exit(1) covers that.
+void die(const char *msg)
+{
+    fprintf(stderr, "%s\n", msg);
+    exit(1);
+}
+
+// mode is "rb" for diskinfo/disklist/diskget (read only) and "r+b" for
+// diskput (needs to write into the existing image too)
+FILE *open_image(const char *path, const char *mode)
+{
+    FILE *f = fopen(path, mode);
+    if (f == NULL)
+        die("Could not open disk image");
+    return f;
+}

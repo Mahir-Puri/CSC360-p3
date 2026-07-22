@@ -40,3 +40,42 @@ FILE *open_image(const char *path, const char *mode)
         die("Could not open disk image");
     return f;
 }
+
+// superblock fields are stored big endian on disk (README.md section 5),
+// so everything needs to go through ntohs/ntohl once we read it in
+void read_superblock(FILE *img, superblock_t *sb)
+{
+    fseek(img, 0, SEEK_SET);
+    if (fread(sb, sizeof(superblock_t), 1, img) != 1)
+        die("Could not read superblock");
+
+    sb->block_size = ntohs(sb->block_size);
+    sb->fs_size = ntohl(sb->fs_size);
+    sb->fat_start = ntohl(sb->fat_start);
+    sb->fat_blocks = ntohl(sb->fat_blocks);
+    sb->root_start = ntohl(sb->root_start);
+    sb->root_blocks = ntohl(sb->root_blocks);
+
+    if (memcmp(sb->fs_id, FS_ID, 8) != 0)
+        die("Not a CSC360FS image");
+}
+
+// tutorial 9 said to load the whole FAT into memory up front since we'll
+// be using it constantly
+uint32_t *load_fat(FILE *img, superblock_t *sb, uint32_t *n_entries_out)
+{
+    uint32_t n_entries = ((uint32_t)sb->fat_blocks * sb->block_size) / 4;
+    uint32_t *fat = malloc(n_entries * sizeof(uint32_t));
+    if (fat == NULL)
+        die("Out of memory");
+
+    fseek(img, (long)sb->fat_start * sb->block_size, SEEK_SET);
+    if (fread(fat, sizeof(uint32_t), n_entries, img) != n_entries)
+        die("Could not read FAT");
+
+    for (uint32_t i = 0; i < n_entries; i++)
+        fat[i] = ntohl(fat[i]);
+
+    *n_entries_out = n_entries;
+    return fat;
+}

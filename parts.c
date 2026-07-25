@@ -128,3 +128,78 @@ void decode_time(const uint8_t t[7], int *year, int *mon, int *day, int *hour, i
     *min = t[5];
     *sec = t[6];
 }
+
+// opposite of decode_time - split year back into hi/lo bytes manually.
+// this is basically doing our own htons() by hand for the 2-byte year,
+// which is fine since these are raw bytes, not a uint16_t field
+void encode_time(uint8_t t[7], int year, int mon, int day, int hour, int min, int sec)
+{
+    t[0] = (year >> 8) & 0xFF;
+    t[1] = year & 0xFF;
+    t[2] = (uint8_t)mon;
+    t[3] = (uint8_t)day;
+    t[4] = (uint8_t)hour;
+    t[5] = (uint8_t)min;
+    t[6] = (uint8_t)sec;
+}
+
+// uses time()+localtime() like tutorial 10 slide 15 showed
+void now_to_time(uint8_t t[7])
+{
+    time_t raw = time(NULL);
+    struct tm *lt = localtime(&raw);
+    encode_time(t, lt->tm_year + 1900, lt->tm_mon + 1, lt->tm_mday, lt->tm_hour, lt->tm_min, lt->tm_sec);
+}
+
+// path helpers
+
+// splits something like "/sub_dir/foo.txt" into dirpath="/sub_dir" and
+// filename="foo.txt". diskget and diskput both need this since their path
+// argument is "which directory" + "which file" mashed together. finds the
+// LAST slash with strrchr so it works no matter how many directories deep
+// the path goes.
+void split_last(const char *path, char *dirpath, char *filename)
+{
+    const char *slash = strrchr(path, '/');
+    if (slash == NULL)
+    {
+        // no slash at all, just assume they meant the root
+        strcpy(dirpath, "/");
+        strcpy(filename, path);
+        return;
+    }
+    strcpy(filename, slash + 1);
+    if (slash == path)
+    {
+        // path was like "/foo.txt" - the "directory part" is just root
+        strcpy(dirpath, "/");
+    }
+    else
+    {
+        size_t len = (size_t)(slash - path);
+        memcpy(dirpath, path, len);
+        dirpath[len] = '\0';
+    }
+}
+
+// breaks a directory path like "/a/b/c" into {"a", "b", "c"} so we can
+// walk down one directory at a time. uses strtok with "/" as the
+// delimiter, which conveniently also skips empty pieces (so "//a//b/"
+// still comes out as just {"a", "b"})
+int split_path(const char *path, char comps[][FILENAME_LEN], int max_comps)
+{
+    int count = 0;
+    char buf[1024];
+    strncpy(buf, path, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+
+    char *tok = strtok(buf, "/");
+    while (tok != NULL && count < max_comps)
+    {
+        strncpy(comps[count], tok, FILENAME_LEN - 1);
+        comps[count][FILENAME_LEN - 1] = '\0';
+        count++;
+        tok = strtok(NULL, "/");
+    }
+    return count;
+}

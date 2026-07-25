@@ -248,3 +248,50 @@ dirhandle_t load_root(FILE *img, superblock_t *sb, uint32_t *fat)
     }
     return dh;
 }
+
+// subdirectories are just files, allocated through the FAT (tutorial 10,
+// slide 16), so this is basically "read the whole file" but we keep the
+// block numbers around too since we might need to write into this
+// directory later
+dirhandle_t load_subdir(FILE *img, superblock_t *sb, uint32_t *fat,
+                        uint32_t start_block, uint32_t self_block, uint32_t self_offset)
+{
+    dirhandle_t dh;
+    dh.is_root = 0;
+    dh.self_block = self_block;
+    dh.self_offset = self_offset;
+
+    uint32_t count = 1;
+    uint32_t b = start_block;
+    while (fat[b] != FAT_EOF)
+    {
+        b = fat[b];
+        count++;
+    }
+
+    dh.n_blocks = count;
+    dh.blocknums = malloc(count * sizeof(uint32_t));
+    dh.data = malloc((size_t)count * sb->block_size);
+    if (dh.blocknums == NULL || dh.data == NULL)
+        die("Out of memory");
+
+    b = start_block;
+    for (uint32_t i = 0; i < count; i++)
+    {
+        dh.blocknums[i] = b;
+        fseek(img, (long)b * sb->block_size, SEEK_SET);
+        fread(dh.data + (size_t)i * sb->block_size, sb->block_size, 1, img);
+        b = fat[b];
+    }
+    return dh;
+}
+
+void free_dirhandle(dirhandle_t *dh)
+{
+    if (dh->data)
+        free(dh->data);
+    if (dh->blocknums)
+        free(dh->blocknums);
+    dh->data = NULL;
+    dh->blocknums = NULL;
+}

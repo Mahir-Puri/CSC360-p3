@@ -203,3 +203,48 @@ int split_path(const char *path, char comps[][FILENAME_LEN], int max_comps)
     }
     return count;
 }
+
+// directories
+
+// the root directory normally lives in the fixed, contiguous region given
+// by the superblock. if diskput ever had to grow it (ran out of the
+// original entries), the extra blocks get linked on with the FAT just
+// like any other file, starting from the last contiguous block so we
+// follow that chain here too, in case it was extended by an earlier run
+dirhandle_t load_root(FILE *img, superblock_t *sb, uint32_t *fat)
+{
+    dirhandle_t dh;
+    dh.is_root = 1;
+    dh.self_block = 0;
+    dh.self_offset = 0;
+    dh.n_blocks = sb->root_blocks;
+    dh.blocknums = malloc(dh.n_blocks * sizeof(uint32_t));
+    if (dh.blocknums == NULL)
+        die("Out of memory");
+    for (uint32_t i = 0; i < sb->root_blocks; i++)
+        dh.blocknums[i] = sb->root_start + i;
+
+    uint32_t last_real = dh.blocknums[dh.n_blocks - 1];
+    while (1)
+    {
+        uint32_t nxt = fat[last_real];
+        if (nxt == FAT_RESERVED || nxt == FAT_FREE || nxt == FAT_EOF)
+            break;
+        dh.blocknums = realloc(dh.blocknums, (dh.n_blocks + 1) * sizeof(uint32_t));
+        if (dh.blocknums == NULL)
+            die("Out of memory");
+        dh.blocknums[dh.n_blocks] = nxt;
+        dh.n_blocks++;
+        last_real = nxt;
+    }
+
+    dh.data = malloc((size_t)dh.n_blocks * sb->block_size);
+    if (dh.data == NULL)
+        die("Out of memory");
+    for (uint32_t i = 0; i < dh.n_blocks; i++)
+    {
+        fseek(img, (long)dh.blocknums[i] * sb->block_size, SEEK_SET);
+        fread(dh.data + (size_t)i * sb->block_size, sb->block_size, 1, img);
+    }
+    return dh;
+}

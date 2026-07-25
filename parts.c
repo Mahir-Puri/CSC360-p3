@@ -295,3 +295,35 @@ void free_dirhandle(dirhandle_t *dh)
     dh->data = NULL;
     dh->blocknums = NULL;
 }
+
+// linear search through every directory entry slot for one with a
+// matching filename. "slot" here just means the index if you imagine all
+// of this directory's blocks laid end to end as one big array of 64-byte
+// entries (so slot 8 is the first entry of the 2nd block, etc). gotta
+// skip anything with STATUS_USED not set - could just be old, deleted, or
+// never-used entries (recall bit 0 of status = "in use").
+int dirhandle_find(dirhandle_t *dh, superblock_t *sb, const char *name, dirent_t *out, uint32_t *out_slot)
+{
+    uint32_t entries_per_block = sb->block_size / sizeof(dirent_t);
+    uint32_t n_slots = dh->n_blocks * entries_per_block;
+
+    for (uint32_t slot = 0; slot < n_slots; slot++)
+    {
+        dirent_t *e = (dirent_t *)(dh->data + (size_t)slot * sizeof(dirent_t));
+        if (!(e->status & STATUS_USED))
+            continue;
+        if (strcmp(e->filename, name) == 0)
+        {
+            // found it - copy it out and fix up the big-endian fields
+            // before handing it back so the caller can just use them
+            memcpy(out, e, sizeof(dirent_t));
+            out->start_block = ntohl(out->start_block);
+            out->num_blocks = ntohl(out->num_blocks);
+            out->file_size = ntohl(out->file_size);
+            if (out_slot != NULL)
+                *out_slot = slot;
+            return 1;
+        }
+    }
+    return 0;
+}

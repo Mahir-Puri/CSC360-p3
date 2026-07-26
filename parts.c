@@ -327,3 +327,53 @@ int dirhandle_find(dirhandle_t *dh, superblock_t *sb, const char *name, dirent_t
     }
     return 0;
 }
+
+// same idea as above but looking for any slot that's NOT in use, so
+// diskput knows where it can write a brand new entry
+int dirhandle_free_slot(dirhandle_t *dh, superblock_t *sb)
+{
+    uint32_t entries_per_block = sb->block_size / sizeof(dirent_t);
+    uint32_t n_slots = dh->n_blocks * entries_per_block;
+
+    for (uint32_t slot = 0; slot < n_slots; slot++)
+    {
+        dirent_t *e = (dirent_t *)(dh->data + (size_t)slot * sizeof(dirent_t));
+        if (!(e->status & STATUS_USED))
+            return (int)slot;
+    }
+    return -1; // directory is full, caller needs to dirhandle_grow() first
+}
+
+// appends one more block to a directory that's run out of free entries.
+// works for both root and subdirectories - always link through the FAT
+// off of the current last block, same idea as growing a regular file
+void dirhandle_grow(FILE *img, superblock_t *sb, uint32_t *fat, uint32_t n_fat_entries, dirhandle_t *dh)
+{
+    uint32_t new_block = alloc_block(fat, n_fat_entries);
+    fat[dh->blocknums[dh->n_blocks - 1]] = new_block;
+    fat[new_block] = FAT_EOF;
+
+    uint32_t new_n = dh->n_blocks + 1;
+    dh->blocknums = realloc(dh->blocknums, new_n * sizeof(uint32_t));
+    dh->data = realloc(dh->data, (size_t)new_n * sb->block_size);
+    if (dh->blocknums == NULL || dh->data == NULL)
+        die("Out of memory");
+    dh->blocknums[new_n - 1] = new_block;
+    memset(dh->data + (size_t)dh->n_blocks * sb->block_size, 0, sb->block_size);
+    dh->n_blocks = new_n;
+
+    uint8_t *zeros = calloc(1, sb->block_size);
+    fseek(img, (long)new_block * sb->block_size, SEEK_SET);
+    fwrite(zeros, sb->block_size, 1, img);
+    free(zeros);
+
+    if (!dh->is_root)
+    {
+        // this directory's own entry (num_blocks field) lives in its
+        // parent, need to bump that too. status(1) + start_block(4) = 5
+        // bytes in, that's where num_blocks starts
+        fseek(img, (long)dh->self_block * sb->block_size + dh->self_offset + 5, SEEK_SET);
+        uint32_t nb = htonl(new_n);
+        fwrite(&nb, sizeof(uint32_t), 1, img);
+    }
+}

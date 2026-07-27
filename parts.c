@@ -525,3 +525,63 @@ int disklist_run(const char *image, const char *path)
     fclose(img);
     return 0;
 }
+
+// diskget
+
+int diskget_run(const char *image, const char *path, const char *destfile)
+{
+    FILE *img = open_image(image, "rb");
+    superblock_t sb;
+    read_superblock(img, &sb);
+    uint32_t n_entries;
+    uint32_t *fat = load_fat(img, &sb, &n_entries);
+
+    char dirpath[1024], filename[FILENAME_LEN];
+    split_last(path, dirpath, filename);
+
+    char comps[MAX_PATH_COMPONENTS][FILENAME_LEN];
+    int n_comps = split_path(dirpath, comps, MAX_PATH_COMPONENTS);
+
+    dirhandle_t dir = resolve_dir(img, &sb, fat, comps, n_comps);
+    dirent_t e;
+    // spec says the same error message covers both cases: the
+    // sub-directory doesn't exist, OR it exists but doesn't have this
+    // file in it. also treat "it's actually a directory" as not found,
+    // since diskget only copies files.
+    if (dir.data == NULL || !dirhandle_find(&dir, &sb, filename, &e, NULL) || (e.status & STATUS_DIR))
+    {
+        printf("Requested file %s not found in %s.\n", filename, dirpath);
+        if (dir.data != NULL)
+            free_dirhandle(&dir);
+        free(fat);
+        fclose(img);
+        return 1;
+    }
+
+    FILE *out = fopen(destfile, "wb");
+    if (out == NULL)
+        die("Could not open destination file");
+
+    // walk the FAT chain (tutorial 10, slide 8-9), but only write out
+    // exactly file_size bytes total the last block may have extra
+    // padding on disk that isn't actually part of the file
+    uint32_t remaining = e.file_size;
+    uint32_t block = e.start_block;
+    uint8_t *buf = malloc(sb.block_size);
+    while (remaining > 0)
+    {
+        fseek(img, (long)block * sb.block_size, SEEK_SET);
+        fread(buf, sb.block_size, 1, img);
+        uint32_t towrite = remaining < sb.block_size ? remaining : sb.block_size;
+        fwrite(buf, 1, towrite, out);
+        remaining -= towrite;
+        block = fat[block];
+    }
+    free(buf);
+    fclose(out);
+
+    free_dirhandle(&dir);
+    free(fat);
+    fclose(img);
+    return 0;
+}

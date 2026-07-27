@@ -474,3 +474,54 @@ int diskinfo_run(const char *image)
     fclose(img);
     return 0;
 }
+
+// disklist
+
+int disklist_run(const char *image, const char *path)
+{
+    FILE *img = open_image(image, "rb");
+    superblock_t sb;
+    read_superblock(img, &sb);
+    uint32_t n_entries;
+    uint32_t *fat = load_fat(img, &sb, &n_entries); // need this to follow subdirs
+
+    char comps[MAX_PATH_COMPONENTS][FILENAME_LEN];
+    int n_comps = split_path(path, comps, MAX_PATH_COMPONENTS);
+
+    // path defaults to "/" (see main() below), so with 0 components this
+    // just gives us the root directory straight away
+    dirhandle_t dir = resolve_dir(img, &sb, fat, comps, n_comps);
+    if (dir.data == NULL)
+    {
+        fprintf(stderr, "Directory not found.\n");
+        free(fat);
+        fclose(img);
+        return 1;
+    }
+
+    // print every valid entry in the order it's stored - spec doesn't say
+    // anything about sorting, so just go slot by slot
+    uint32_t entries_per_block = sb.block_size / sizeof(dirent_t);
+    uint32_t n_slots = dir.n_blocks * entries_per_block;
+    for (uint32_t slot = 0; slot < n_slots; slot++)
+    {
+        dirent_t *e = (dirent_t *)(dir.data + (size_t)slot * sizeof(dirent_t));
+        if (!(e->status & STATUS_USED))
+            continue;
+
+        uint32_t file_size = ntohl(e->file_size);
+        int year, mon, day, hour, min, sec;
+        decode_time(e->creation_time, &year, &mon, &day, &hour, &min, &sec);
+
+        char type = (e->status & STATUS_DIR) ? 'D' : 'F';
+        // F/D + space, 10-char size + space, 30-char name + space, timestamp
+        // (README.md section 3.2)
+        printf("%c %10u %30s %04d/%02d/%02d %02d:%02d:%02d\n",
+               type, file_size, e->filename, year, mon, day, hour, min, sec);
+    }
+
+    free_dirhandle(&dir);
+    free(fat);
+    fclose(img);
+    return 0;
+}

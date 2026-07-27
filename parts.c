@@ -377,3 +377,56 @@ void dirhandle_grow(FILE *img, superblock_t *sb, uint32_t *fat, uint32_t n_fat_e
         fwrite(&nb, sizeof(uint32_t), 1, img);
     }
 }
+
+// writes one dirent_t into a specific slot of a directory, both in our
+// in-memory copy (dh->data) and on the actual disk image. this is the one
+// place diskput actually creates/updates a directory entry, whether it's
+// for a new subdirectory or the final file.
+void dirhandle_write_entry(FILE *img, superblock_t *sb, dirhandle_t *dh, uint32_t slot, dirent_t *entry)
+{
+    // entry comes in with host-order numbers (easier for us to work
+    // with), gotta flip them to big endian before it touches the disk
+    dirent_t disk_entry = *entry;
+    disk_entry.start_block = htonl(disk_entry.start_block);
+    disk_entry.num_blocks = htonl(disk_entry.num_blocks);
+    disk_entry.file_size = htonl(disk_entry.file_size);
+
+    memcpy(dh->data + (size_t)slot * sizeof(dirent_t), &disk_entry, sizeof(dirent_t));
+
+    // slot -> which block + which byte offset inside that block
+    uint32_t entries_per_block = sb->block_size / sizeof(dirent_t);
+    uint32_t block_idx = slot / entries_per_block;
+    uint32_t byte_off = (slot % entries_per_block) * sizeof(dirent_t);
+
+    fseek(img, (long)dh->blocknums[block_idx] * sb->block_size + byte_off, SEEK_SET);
+    fwrite(&disk_entry, sizeof(dirent_t), 1, img);
+}
+
+// walks a read-only path (used by disklist / diskget) starting at root.
+// returns a dirhandle with data == NULL if any component is missing or
+// isn't actually a directory
+static dirhandle_t resolve_dir(FILE *img, superblock_t *sb, uint32_t *fat,
+                               char comps[][FILENAME_LEN], int n_comps)
+{
+    dirhandle_t cur = load_root(img, sb, fat);
+    uint32_t entries_per_block = sb->block_size / sizeof(dirent_t);
+
+    for (int i = 0; i < n_comps; i++)
+    {
+        dirent_t e;
+        uint32_t slot;
+        if (!dirhandle_find(&cur, sb, comps[i], &e, &slot) || !(e.status & STATUS_DIR))
+        {
+            free_dirhandle(&cur);
+            dirhandle_t bad;
+            memset(&bad, 0, sizeof(bad));
+            return bad;
+        }
+        uint32_t pblock = cur.blocknums[slot / entries_per_block];
+        uint32_t poffset = (slot % entries_per_block) * sizeof(dirent_t);
+        dirhandle_t next = load_subdir(img, sb, fat, e.start_block, pblock, poffset);
+        free_dirhandle(&cur);
+        cur = next;
+    }
+    return cur;
+}

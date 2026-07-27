@@ -430,3 +430,47 @@ static dirhandle_t resolve_dir(FILE *img, superblock_t *sb, uint32_t *fat,
     }
     return cur;
 }
+
+// diskinfo
+
+int diskinfo_run(const char *image)
+{
+    FILE *img = open_image(image, "rb");
+    superblock_t sb;
+    read_superblock(img, &sb);
+
+    uint32_t n_entries;
+    uint32_t *fat = load_fat(img, &sb, &n_entries);
+
+    // just tally up whatever's actually in the FAT - don't need to work
+    // out which blocks "should" be reserved ourselves, the image already
+    // has that info baked in (tutorial 9, slide 18)
+    uint32_t free_blocks = 0, reserved_blocks = 0, allocated_blocks = 0;
+    uint32_t count = sb.fs_size < n_entries ? sb.fs_size : n_entries;
+    for (uint32_t i = 0; i < count; i++)
+    {
+        if (fat[i] == FAT_FREE)
+            free_blocks++;
+        else if (fat[i] == FAT_RESERVED)
+            reserved_blocks++;
+        else
+            allocated_blocks++; // covers both "points to next block" and FAT_EOF
+    }
+
+    printf("Super block information:\n");
+    printf("Block size: %u\n", sb.block_size);
+    printf("Block count: %u\n", sb.fs_size);
+    printf("FAT starts: %u\n", sb.fat_start);
+    printf("FAT blocks: %u\n", sb.fat_blocks);
+    printf("Root directory start: %u\n", sb.root_start);
+    printf("Root directory blocks: %u\n", sb.root_blocks);
+    printf("\n");
+    printf("FAT information:\n");
+    printf("Free Blocks: %u\n", free_blocks);
+    printf("Reserved Blocks: %u\n", reserved_blocks);
+    printf("Allocated Blocks: %u\n", allocated_blocks);
+
+    free(fat);
+    fclose(img);
+    return 0;
+}

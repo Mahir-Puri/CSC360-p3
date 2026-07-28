@@ -446,7 +446,11 @@ int diskinfo_run(const char *image)
     // out which blocks "should" be reserved ourselves, the image already
     // has that info baked in (tutorial 9, slide 18)
     uint32_t free_blocks = 0, reserved_blocks = 0, allocated_blocks = 0;
-    uint32_t count = sb.fs_size < n_entries ? sb.fs_size : n_entries;
+    uint32_t count;
+    if (sb.fs_size < n_entries)
+        count = sb.fs_size;
+    else
+        count = n_entries;
     for (uint32_t i = 0; i < count; i++)
     {
         if (fat[i] == FAT_FREE)
@@ -513,7 +517,11 @@ int disklist_run(const char *image, const char *path)
         int year, mon, day, hour, min, sec;
         decode_time(e->creation_time, &year, &mon, &day, &hour, &min, &sec);
 
-        char type = (e->status & STATUS_DIR) ? 'D' : 'F';
+        char type;
+        if (e->status & STATUS_DIR)
+            type = 'D';
+        else
+            type = 'F';
         // F/D + space, 10-char size + space, 30-char name + space, timestamp
         // (README.md section 3.2)
         printf("%c %10u %30s %04d/%02d/%02d %02d:%02d:%02d\n",
@@ -572,7 +580,11 @@ int diskget_run(const char *image, const char *path, const char *destfile)
     {
         fseek(img, (long)block * sb.block_size, SEEK_SET);
         fread(buf, sb.block_size, 1, img);
-        uint32_t towrite = remaining < sb.block_size ? remaining : sb.block_size;
+        uint32_t towrite;
+        if (remaining < sb.block_size)
+            towrite = remaining;
+        else
+            towrite = sb.block_size;
         fwrite(buf, 1, towrite, out);
         remaining -= towrite;
         block = fat[block];
@@ -606,7 +618,11 @@ int diskput_run(const char *image, const char *srcfile, const char *destpath)
     // read the whole source file into memory up front - simplest way to
     // handle it since we need the total size anyway to know how many
     // blocks to allocate
-    uint8_t *filedata = malloc(size > 0 ? (size_t)size : 1);
+    uint8_t *filedata;
+    if (size > 0)
+        filedata = malloc((size_t)size);
+    else
+        filedata = malloc(1);
     if (size > 0)
         fread(filedata, 1, (size_t)size, src);
     fclose(src);
@@ -746,7 +762,11 @@ int diskput_run(const char *image, const char *srcfile, const char *destpath)
     // gotcha!) - zero the buffer first each time so the leftover tail of
     // the last block is just zeros instead of garbage. an empty (0 byte)
     // file still gets exactly 1 block, per the other tutorial 11 gotcha.
-    uint32_t nblocks = (size == 0) ? 1 : (uint32_t)((size + sb.block_size - 1) / sb.block_size);
+    uint32_t nblocks;
+    if (size == 0)
+        nblocks = 1;
+    else
+        nblocks = (uint32_t)((size + sb.block_size - 1) / sb.block_size);
     uint32_t first_block = 0, prev_block = 0;
     uint8_t *blockbuf = malloc(sb.block_size);
 
@@ -765,7 +785,11 @@ int diskput_run(const char *image, const char *srcfile, const char *destpath)
         long remaining = size - offset;
         if (remaining > 0)
         {
-            long towrite = remaining < sb.block_size ? remaining : sb.block_size;
+            long towrite;
+            if (remaining < sb.block_size)
+                towrite = remaining;
+            else
+                towrite = sb.block_size;
             memcpy(blockbuf, filedata + offset, (size_t)towrite);
         }
         fseek(img, (long)b * sb.block_size, SEEK_SET);
@@ -821,7 +845,12 @@ int main(int argc, char **argv)
         fprintf(stderr, "usage: %s <disk image> [path]\n", argv[0]);
         return 1;
     }
-    return disklist_run(argv[1], argc == 3 ? argv[2] : "/");
+    const char *path;
+    if (argc == 3)
+        path = argv[2];
+    else
+        path = "/";
+    return disklist_run(argv[1], path);
 #elif defined(DISKGET)
     if (argc != 4)
     {

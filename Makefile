@@ -19,5 +19,6 @@ diskput: parts.c structs.h
 
 clean:
 	rm -f diskinfo disklist diskget diskput
+	rm -rf *.dSYM
 
 .PHONY: all clean

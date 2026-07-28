@@ -562,7 +562,7 @@ int diskget_run(const char *image, const char *path, const char *destfile)
     if (out == NULL)
         die("Could not open destination file");
 
-    // walk the FAT chain (tutorial 10, slide 8-9), but only write out
+    // walk the FAT chain (taken the concept from tutorial 10, slide 8-9), but only write out
     // exactly file_size bytes total the last block may have extra
     // padding on disk that isn't actually part of the file
     uint32_t remaining = e.file_size;
@@ -581,6 +581,223 @@ int diskget_run(const char *image, const char *path, const char *destfile)
     fclose(out);
 
     free_dirhandle(&dir);
+    free(fat);
+    fclose(img);
+    return 0;
+}
+
+// diskput
+
+int diskput_run(const char *image, const char *srcfile, const char *destpath)
+{
+    FILE *src = fopen(srcfile, "rb");
+    if (src == NULL)
+    {
+        printf("Source file %s not found.\n", srcfile);
+        return 1;
+    }
+
+    // get the size of the source file - fseek to the end, then ftell
+    // (tutorial 10, slide 14)
+    fseek(src, 0, SEEK_END);
+    long size = ftell(src);
+    fseek(src, 0, SEEK_SET);
+
+    // read the whole source file into memory up front - simplest way to
+    // handle it since we need the total size anyway to know how many
+    // blocks to allocate
+    uint8_t *filedata = malloc(size > 0 ? (size_t)size : 1);
+    if (size > 0)
+        fread(filedata, 1, (size_t)size, src);
+    fclose(src);
+
+    FILE *img = open_image(image, "r+b");
+    superblock_t sb;
+    read_superblock(img, &sb);
+    uint32_t n_entries;
+    uint32_t *fat = load_fat(img, &sb, &n_entries);
+
+    char dirpath[1024], filename[FILENAME_LEN];
+    split_last(destpath, dirpath, filename);
+
+    char comps[MAX_PATH_COMPONENTS][FILENAME_LEN];
+    int n_comps = split_path(dirpath, comps, MAX_PATH_COMPONENTS);
+
+    uint32_t entries_per_block = sb.block_size / sizeof(dirent_t);
+    dirhandle_t cur = load_root(img, &sb, fat);
+
+    // walk down the path one component at a time, creating any
+    // subdirectory that doesn't exist yet. "cur" is always the directory
+    // we're currently standing in - by the end of this loop it'll be the
+    // final destination directory (gotcha from tutorial 11: the missing
+    // part of the path could be several levels deep, e.g. /a/b/c/file.txt
+    // where NONE of a, b, c exist yet - this loop handles that fine since
+    // it just keeps creating + descending one level at a time)
+    for (int i = 0; i < n_comps; i++)
+    {
+        dirent_t e;
+        uint32_t slot;
+        if (dirhandle_find(&cur, &sb, comps[i], &e, &slot))
+        {
+            // this part of the path already exists, just go into it
+            if (!(e.status & STATUS_DIR))
+                die("A component of the destination path is not a directory");
+
+            uint32_t pblock = cur.blocknums[slot / entries_per_block];
+            uint32_t poffset = (slot % entries_per_block) * sizeof(dirent_t);
+            dirhandle_t next = load_subdir(img, &sb, fat, e.start_block, pblock, poffset);
+            free_dirhandle(&cur);
+            cur = next;
+            continue;
+        }
+
+        // doesn't exist - need to create it. first find (or make) room
+        // for a new directory entry in the CURRENT directory
+        int free_slot = dirhandle_free_slot(&cur, &sb);
+        if (free_slot < 0)
+        {
+            dirhandle_grow(img, &sb, fat, n_entries, &cur);
+            free_slot = dirhandle_free_slot(&cur, &sb);
+        }
+
+        // a brand new directory just needs one block to start - it'll
+        // have room for 8 entries (512 / 64) before it needs to grow
+        uint32_t new_block = alloc_block(fat, n_entries);
+        fat[new_block] = FAT_EOF;
+
+        dirent_t newdir;
+        memset(&newdir, 0, sizeof(newdir));
+        newdir.status = STATUS_USED | STATUS_DIR;
+        newdir.start_block = new_block;
+        newdir.num_blocks = 1;
+        newdir.file_size = 0; // directories don't really have a "size"
+        now_to_time(newdir.creation_time);
+        memcpy(newdir.modified_time, newdir.creation_time, 7);
+        strncpy(newdir.filename, comps[i], FILENAME_LEN - 1);
+        memset(newdir.unused, 0xFF, sizeof(newdir.unused));
+
+        // write the new directory's entry into the PARENT (cur), then
+        // remember where we just wrote it, since that's where we'll come
+        // back to bump num_blocks if this new directory ever grows
+        dirhandle_write_entry(img, &sb, &cur, (uint32_t)free_slot, &newdir);
+
+        uint32_t pblock = cur.blocknums[free_slot / entries_per_block];
+        uint32_t poffset = ((uint32_t)free_slot % entries_per_block) * sizeof(dirent_t);
+
+        // zero out the new directory's one block so all 8 of its entries
+        // start off looking "unused" (status byte 0)
+        uint8_t *zeros = calloc(1, sb.block_size);
+        fseek(img, (long)new_block * sb.block_size, SEEK_SET);
+        fwrite(zeros, sb.block_size, 1, img);
+        free(zeros);
+
+        // now step into the directory we just created and keep going
+        dirhandle_t next = load_subdir(img, &sb, fat, new_block, pblock, poffset);
+        free_dirhandle(&cur);
+        cur = next;
+    }
+
+    // "cur" is now the actual destination directory. check if a file with
+    // this name is already sitting there - if so we overwrite it: free
+    // its old block chain back to the FAT (walking it just like reading a
+    // file, except marking every block FAT_FREE instead of copying it)
+    // and reuse its same directory entry slot. otherwise just grab a free
+    // slot like we did for the subdirectories above.
+    dirent_t existing;
+    uint32_t existing_slot;
+    int slot_int;
+    uint8_t creation_time[7];
+    int have_creation_time = 0;
+
+    if (dirhandle_find(&cur, &sb, filename, &existing, &existing_slot))
+    {
+        if (existing.status & STATUS_DIR)
+            die("A directory already exists with that name");
+
+        uint32_t b = existing.start_block;
+        while (1)
+        {
+            uint32_t next_b = fat[b];
+            fat[b] = FAT_FREE;
+            if (next_b == FAT_EOF)
+                break;
+            b = next_b;
+        }
+
+        slot_int = (int)existing_slot;
+        // keep the original creation time, only the modified time should change
+        memcpy(creation_time, existing.creation_time, 7);
+        have_creation_time = 1;
+    }
+    else
+    {
+        slot_int = dirhandle_free_slot(&cur, &sb);
+        if (slot_int < 0)
+        {
+            dirhandle_grow(img, &sb, fat, n_entries, &cur);
+            slot_int = dirhandle_free_slot(&cur, &sb);
+        }
+    }
+
+    // now actually allocate blocks for the file data and write it to
+    // disk, one block at a time, chaining them together in the FAT as we
+    // go (this is the "linked allocation" tutorial 10 talked about).
+    // don't assume the size is a multiple of the block size (tutorial 11
+    // gotcha!) - zero the buffer first each time so the leftover tail of
+    // the last block is just zeros instead of garbage. an empty (0 byte)
+    // file still gets exactly 1 block, per the other tutorial 11 gotcha.
+    uint32_t nblocks = (size == 0) ? 1 : (uint32_t)((size + sb.block_size - 1) / sb.block_size);
+    uint32_t first_block = 0, prev_block = 0;
+    uint8_t *blockbuf = malloc(sb.block_size);
+
+    for (uint32_t i = 0; i < nblocks; i++)
+    {
+        uint32_t b = alloc_block(fat, n_entries);
+        if (i == 0)
+            first_block = b;
+        else
+            fat[prev_block] = b; // link the previous block to this one
+        fat[b] = FAT_EOF;        // this one's the end of the chain for now
+        prev_block = b;
+
+        memset(blockbuf, 0, sb.block_size);
+        long offset = (long)i * sb.block_size;
+        long remaining = size - offset;
+        if (remaining > 0)
+        {
+            long towrite = remaining < sb.block_size ? remaining : sb.block_size;
+            memcpy(blockbuf, filedata + offset, (size_t)towrite);
+        }
+        fseek(img, (long)b * sb.block_size, SEEK_SET);
+        fwrite(blockbuf, sb.block_size, 1, img);
+    }
+    free(blockbuf);
+    free(filedata);
+
+    // last step - write the directory entry itself so disklist/diskget
+    // can actually find this file afterwards
+    dirent_t entry;
+    memset(&entry, 0, sizeof(entry));
+    entry.status = STATUS_USED | STATUS_FILE;
+    entry.start_block = first_block;
+    entry.num_blocks = nblocks;
+    entry.file_size = (uint32_t)size;
+    if (have_creation_time)
+        memcpy(entry.creation_time, creation_time, 7);
+    else
+        now_to_time(entry.creation_time);
+    now_to_time(entry.modified_time);
+    strncpy(entry.filename, filename, FILENAME_LEN - 1);
+    memset(entry.unused, 0xFF, sizeof(entry.unused));
+
+    dirhandle_write_entry(img, &sb, &cur, (uint32_t)slot_int, &entry);
+
+    // everything above only touched our in-memory copy of the FAT (fat[]),
+    // so this is the one spot that actually flushes all those block
+    // allocations/frees back out to the disk image
+    save_fat(img, &sb, fat, n_entries);
+
+    free_dirhandle(&cur);
     free(fat);
     fclose(img);
     return 0;

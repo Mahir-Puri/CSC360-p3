@@ -802,3 +802,41 @@ int diskput_run(const char *image, const char *srcfile, const char *destpath)
     fclose(img);
     return 0;
 }
+
+// main - picks which part to run based on which -D flag the Makefile
+// used to compile this file
+
+int main(int argc, char **argv)
+{
+#ifdef DISKINFO
+    if (argc != 2)
+    {
+        fprintf(stderr, "usage: %s <disk image>\n", argv[0]);
+        return 1;
+    }
+    return diskinfo_run(argv[1]);
+#elif defined(DISKLIST)
+    if (argc < 2 || argc > 3)
+    {
+        fprintf(stderr, "usage: %s <disk image> [path]\n", argv[0]);
+        return 1;
+    }
+    return disklist_run(argv[1], argc == 3 ? argv[2] : "/");
+#elif defined(DISKGET)
+    if (argc != 4)
+    {
+        fprintf(stderr, "usage: %s <disk image> <path in image> <dest file>\n", argv[0]);
+        return 1;
+    }
+    return diskget_run(argv[1], argv[2], argv[3]);
+#elif defined(DISKPUT)
+    if (argc != 4)
+    {
+        fprintf(stderr, "usage: %s <disk image> <src file> <dest path in image>\n", argv[0]);
+        return 1;
+    }
+    return diskput_run(argv[1], argv[2], argv[3]);
+#else
+#error "No part specified - define one of DISKINFO/DISKLIST/DISKGET/DISKPUT"
+#endif
+}
